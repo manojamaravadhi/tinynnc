@@ -18,6 +18,8 @@ int main(void) {
     test_tensor();
     printf("== ops ==\n");
     test_ops();
+    printf("== graph ==\n");
+    test_graph();
 
     printf("\n%d tests, %d passed, %d failed\n", g_tests_run,
            g_tests_run - g_tests_failed, g_tests_failed);

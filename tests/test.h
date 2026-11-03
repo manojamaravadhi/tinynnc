@@ -56,5 +56,6 @@ void run_test(const char *name, void (*fn)(void));
 /* One entry point per test file, called from test_main.c. */
 void test_tensor(void);
 void test_ops(void);
+void test_graph(void);
 
 #endif
