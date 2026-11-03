@@ -57,5 +57,7 @@ void run_test(const char *name, void (*fn)(void));
 void test_tensor(void);
 void test_ops(void);
 void test_graph(void);
+void test_parser(void);
+void test_exec(void);
 
 #endif

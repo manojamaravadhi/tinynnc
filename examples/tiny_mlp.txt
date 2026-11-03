@@ -1,0 +1,25 @@
+# Tiny MLP: 4 -> 3 (ReLU) -> 2 (softmax), batch of 1.
+# Try: ./tinynnc examples/tiny_mlp.txt --input 1,2,3,4 --dump-ir --verify
+INPUT x 1 4
+
+CONST W1 4 3
+   0.2 -0.5  0.1
+   0.4  0.3 -0.2
+  -0.1  0.6  0.5
+   0.3 -0.4  0.2
+CONST B1 1 3   0.1 -0.1 0.05
+
+MATMUL t1 x W1
+ADD    t2 t1 B1
+RELU   t3 t2
+
+CONST W2 3 2
+   0.5 -0.3
+  -0.2  0.8
+   0.7  0.1
+CONST B2 1 2   0.0 0.1
+
+MATMUL t4 t3 W2
+ADD    t5 t4 B2
+SOFTMAX y t5
+OUTPUT y

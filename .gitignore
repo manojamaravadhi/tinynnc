@@ -5,3 +5,4 @@ build-debug/
 *.png
 __pycache__/
 .DS_Store
+/tinynnc

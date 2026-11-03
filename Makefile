@@ -1,7 +1,8 @@
 # TinyNNC build.
 #
-#   make          build the library and the test binary (release, -O2)
-#   make test     build and run all tests (non-zero exit on failure)
+#   make          build ./tinynnc, the library, and the test binary (release, -O2)
+#   make test     run all C tests, then the NumPy cross-check if numpy is installed
+#   make crosscheck  only the NumPy cross-check
 #   make debug    rebuild with AddressSanitizer + UBSan into build-debug/ and run tests
 #   make leaks    run the release tests under macOS `leaks` (Valgrind is unavailable on Apple Silicon)
 #   make clean    remove build outputs
@@ -31,10 +32,16 @@ HEADERS  := $(wildcard include/*.h) $(wildcard tests/*.h)
 
 LIB       := $(BUILD)/libtinynnc.a
 TEST_BIN  := $(BUILD)/run_tests
+BIN       ?= tinynnc
+PYTHON    ?= python3
+CROSS_OPTS ?= none
 
-.PHONY: all test debug leaks bench clean
+.PHONY: all test unit crosscheck debug leaks bench clean
 
-all: $(LIB) $(TEST_BIN)
+all: $(LIB) $(TEST_BIN) $(BIN)
+
+$(BIN): $(BUILD)/src/main.o $(LIB)
+	$(CC) $(CFLAGS) $(LDFLAGS) $< $(LIB) $(LDLIBS) -o $@
 
 $(BUILD)/src/%.o: src/%.c $(HEADERS)
 	@mkdir -p $(dir $@)
@@ -51,20 +58,31 @@ $(LIB): $(LIB_OBJ)
 $(TEST_BIN): $(TEST_OBJ) $(LIB)
 	$(CC) $(CFLAGS) $(LDFLAGS) $(TEST_OBJ) $(LIB) $(LDLIBS) -o $@
 
-test: $(TEST_BIN)
+unit: $(TEST_BIN)
 	./$(TEST_BIN)
+
+# The cross-check is skipped (not failed) on machines without NumPy, so that
+# `make test` still works on a fresh clone with only a C compiler.
+crosscheck: $(BIN)
+	$(PYTHON) scripts/crosscheck.py --bin ./$(BIN) --opts $(CROSS_OPTS)
+
+test: unit $(BIN)
+	@if $(PYTHON) -c "import numpy" >/dev/null 2>&1; then \
+	  $(PYTHON) scripts/crosscheck.py --bin ./$(BIN) --opts $(CROSS_OPTS); \
+	else echo "crosscheck: SKIPPED (python3 + numpy not found)"; fi
 
 # Sanitizer build lives in its own directory so it never mixes objects with the release build.
 # -fno-sanitize-recover makes any UB report fatal, so `make debug` fails loudly.
 debug:
-	$(MAKE) BUILD=build-debug OPT="-O1 -g -fno-omit-frame-pointer" \
+	$(MAKE) BUILD=build-debug BIN=build-debug/tinynnc OPT="-O1 -g -fno-omit-frame-pointer" \
 	  SAN="-fsanitize=address,undefined -fno-sanitize-recover=all" test
 
-leaks: $(TEST_BIN)
-	leaks --atExit -- ./$(TEST_BIN)
+leaks: $(TEST_BIN) $(BIN)
+	leaks --atExit -- ./$(TEST_BIN) | tail -3
+	leaks --atExit -- ./$(BIN) examples/redundant.txt --opt none --verify | tail -3
 
 bench:
 	@echo "bench: added in milestone M6"
 
 clean:
-	rm -rf build build-debug
+	rm -rf build build-debug $(BIN)

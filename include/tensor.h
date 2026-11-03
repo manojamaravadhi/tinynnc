@@ -55,6 +55,11 @@ char *shape_str(int ndim, const int *shape, char *buf, size_t buflen);
 
 void tensor_print(const Tensor *t, FILE *out);
 
+/* Fills t with deterministic pseudo-random values in [-scale, scale), using a
+ * simple LCG. The same seed gives the same values on every platform, so tests and
+ * benchmarks are reproducible. *seed is advanced. */
+void tensor_fill_random(Tensor *t, unsigned *seed, float scale);
+
 /* Memory accounting for tensor data buffers, across the whole process.
  * Not thread-safe. Allocation only happens on the main thread. */
 size_t tensor_mem_live(void);

@@ -20,6 +20,10 @@ int main(void) {
     test_ops();
     printf("== graph ==\n");
     test_graph();
+    printf("== parser ==\n");
+    test_parser();
+    printf("== executor ==\n");
+    test_exec();
 
     printf("\n%d tests, %d passed, %d failed\n", g_tests_run,
            g_tests_run - g_tests_failed, g_tests_failed);

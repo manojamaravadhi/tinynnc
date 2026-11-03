@@ -116,3 +116,11 @@ void tensor_print(const Tensor *t, FILE *out) {
         if (i % cols == cols - 1) fputc('\n', out);
     }
 }
+
+void tensor_fill_random(Tensor *t, unsigned *seed, float scale) {
+    for (size_t i = 0; i < t->size; i++) {
+        *seed = *seed * 1103515245u + 12345u;
+        float u = (float)((*seed >> 8) & 0xFFFF) / 65536.0f; /* [0, 1) */
+        t->data[i] = (2.0f * u - 1.0f) * scale;
+    }
+}

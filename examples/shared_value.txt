@@ -1,0 +1,18 @@
+# Fusion safety example: the MATMUL result `m` has TWO consumers (ADD and SIGMOID).
+# Fusing MATMUL+ADD would hide `m` inside the fused kernel, but SIGMOID still needs it.
+# So the fusion pass must leave MATMUL+ADD alone here. The ADD -> RELU part of the
+# chain is a separate question, and is unaffected.
+# Try: ./tinynnc examples/shared_value.txt --opt all --dump-ir --verify
+INPUT x 1 4
+CONST W 4 3
+   0.2 -0.5  0.1
+   0.4  0.3 -0.2
+  -0.1  0.6  0.5
+   0.3 -0.4  0.2
+CONST b 1 3  0.1 -0.1 0.05
+MATMUL m x W
+ADD    a m b
+RELU   r a
+SIGMOID s m             # second consumer of m
+ADD    y r s
+OUTPUT y
