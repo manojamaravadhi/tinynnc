@@ -1,0 +1,21 @@
+digraph "after" {
+  rankdir=TB;
+  node [shape=box, style="rounded,filled", fontname="Helvetica", fillcolor="#ffffff"];
+  n0 [label="x\nINPUT [2x4]", fillcolor="#cfe8ff"];
+  n1 [label="W1\nCONST [4x4]", fillcolor="#e5e7eb", shape=note];
+  n4 [label="B1\nCONST [1x4]", fillcolor="#e5e7eb", shape=note];
+  n7 [label="r1\nLINEAR_RELU [2x4]", fillcolor="#fde68a"];
+  n14 [label="W2\nCONST [4x3]", fillcolor="#e5e7eb", shape=note];
+  n15 [label="B2\nCONST [1x3]", fillcolor="#e5e7eb", shape=note];
+  n18 [label="a2\nLINEAR [2x3]", fillcolor="#fde68a"];
+  n20 [label="y\nSOFTMAX [2x3]", fillcolor="#ffffff"];
+  n0 -> n7;
+  n1 -> n7;
+  n4 -> n7;
+  n7 -> n18;
+  n14 -> n18;
+  n15 -> n18;
+  n18 -> n20;
+  out [shape=plaintext, style="", label="output"];
+  n20 -> out;
+}

@@ -3,6 +3,7 @@
 #   make          build ./tinynnc, the library, and the test binary (release, -O2)
 #   make test     run all C tests, then the NumPy cross-check if numpy is installed
 #   make crosscheck  only the NumPy cross-check
+#   make bench    run benchmarks and regenerate docs/RESULTS.md
 #   make debug    rebuild with AddressSanitizer + UBSan into build-debug/ and run tests
 #   make leaks    run the release tests under macOS `leaks` (Valgrind is unavailable on Apple Silicon)
 #   make clean    remove build outputs
@@ -81,8 +82,14 @@ leaks: $(TEST_BIN) $(BIN)
 	leaks --atExit -- ./$(TEST_BIN) | tail -3
 	leaks --atExit -- ./$(BIN) examples/redundant.txt --opt all --verify | tail -3
 
-bench:
-	@echo "bench: added in milestone M6"
+BENCH_BIN := $(BUILD)/bench
+
+$(BENCH_BIN): bench/bench.c $(LIB) $(HEADERS)
+	$(CC) $(CFLAGS) $(LDFLAGS) -DTNN_CFLAGS='"$(CFLAGS)"' bench/bench.c $(LIB) $(LDLIBS) -o $@
+
+# Runs the benchmark and rewrites docs/RESULTS.md with freshly measured numbers.
+bench: $(BENCH_BIN)
+	./$(BENCH_BIN) docs/RESULTS.md
 
 clean:
 	rm -rf build build-debug $(BIN)
