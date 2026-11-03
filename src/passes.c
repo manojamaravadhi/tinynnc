@@ -255,6 +255,79 @@ int pass_cse(Graph *g) {
 }
 
 /* ------------------------------------------------------------------------- */
+/* Operator fusion                                                            */
+/* ------------------------------------------------------------------------- */
+/*
+ * SAFETY RULE (both fusions): the intermediate value may be fused away only if
+ * it has exactly ONE consumer, the op being fused into it, and is not the graph
+ * output (graph_count_uses counts the output as a consumer, so one check covers
+ * both). If anything else reads the intermediate, it must still exist in memory,
+ * and the fused kernel never writes it out. Fusing anyway would either break
+ * that other consumer or force us to compute the matmul twice.
+ * See examples/shared_value.txt for a model where fusion must be skipped.
+ */
+
+/* ADD(MATMUL(x, W), b) -> LINEAR(x, W, b), and also ADD(b, MATMUL(x, W)).
+ * Float addition is commutative bit for bit (a+b == b+a in IEEE 754), so both
+ * operand orders give exactly the result of the fused kernel's `acc + bias`. */
+int pass_fuse_linear(Graph *g) {
+    int *uses = malloc((size_t)g->count * sizeof(int));
+    if (uses == NULL) return -1;
+    graph_count_uses(g, uses);
+    int fused = 0;
+    for (int i = 0; i < g->count; i++) {
+        Node *add = &g->nodes[i];
+        if (add->dead || add->op != OP_ADD) continue;
+        for (int side = 0; side < 2; side++) {
+            int m = add->inputs[side], bias = add->inputs[1 - side];
+            if (!is_live_op(g, m, OP_MATMUL) || uses[m] != 1) continue;
+            /* The matmul result must have the full output shape. If it were the
+             * broadcast (1 x N) operand of the ADD, the fused kernel would produce
+             * only one row. The bias must be (1 x N) or (M x N), which is what
+             * op_linear supports. */
+            const Node *mm = &g->nodes[m], *bn = &g->nodes[bias];
+            if (!same_shape(mm, add)) continue;
+            if (bn->ndim != 2 || bn->shape[1] != add->shape[1] ||
+                (bn->shape[0] != 1 && bn->shape[0] != add->shape[0]))
+                continue;
+            add->op = OP_LINEAR;
+            add->ninputs = 3;
+            add->inputs[0] = mm->inputs[0];
+            add->inputs[1] = mm->inputs[1];
+            add->inputs[2] = bias;
+            graph_kill_node(g, m); /* its only consumer was this ADD */
+            fused++;
+            break;
+        }
+    }
+    free(uses);
+    return fused;
+}
+
+/* RELU(LINEAR(x, W, b)) -> LINEAR_RELU(x, W, b). Run after pass_fuse_linear, so
+ * MATMUL -> ADD -> RELU becomes a single kernel. */
+int pass_fuse_linear_relu(Graph *g) {
+    int *uses = malloc((size_t)g->count * sizeof(int));
+    if (uses == NULL) return -1;
+    graph_count_uses(g, uses);
+    int fused = 0;
+    for (int i = 0; i < g->count; i++) {
+        Node *r = &g->nodes[i];
+        if (r->dead || r->op != OP_RELU) continue;
+        int l = r->inputs[0];
+        if (!is_live_op(g, l, OP_LINEAR) || uses[l] != 1) continue;
+        const Node *lin = &g->nodes[l];
+        r->op = OP_LINEAR_RELU;
+        r->ninputs = 3;
+        memcpy(r->inputs, lin->inputs, sizeof r->inputs);
+        graph_kill_node(g, l);
+        fused++;
+    }
+    free(uses);
+    return fused;
+}
+
+/* ------------------------------------------------------------------------- */
 /* Pass manager                                                               */
 /* ------------------------------------------------------------------------- */
 
@@ -334,6 +407,16 @@ int run_passes(Graph *g, unsigned mask, PassReport *report, FILE *log, char *err
         r.rounds++;
     } while (changed && r.rounds < max_rounds);
 
+    /* Fusion runs last, on the cleaned-up graph. Cleanup can enable fusion:
+     * after CSE merges a duplicate MATMUL and DCE removes a dead consumer, a
+     * MATMUL that had two consumers has only one, and can now be fused. */
+    if (mask & PASS_FUSE) {
+        int a = pass_fuse_linear(g);
+        int b = a < 0 ? -1 : pass_fuse_linear_relu(g);
+        if (a < 0 || b < 0) goto fail;
+        r.fuse = a + b;
+    }
+
     /* Sanity check: every pass must leave a well-formed graph. */
     if (graph_infer_shapes(g, err, errlen) != 0) return -1;
 
@@ -346,6 +429,7 @@ int run_passes(Graph *g, unsigned mask, PassReport *report, FILE *log, char *err
             fprintf(log, "  algebraic simplify    : %d nodes rewritten\n", r.simplify);
         if (mask & PASS_CSE) fprintf(log, "  common subexpr elim   : %d nodes merged\n", r.cse);
         if (mask & PASS_DCE) fprintf(log, "  dead code elimination : %d nodes removed\n", r.dce);
+        if (mask & PASS_FUSE) fprintf(log, "  operator fusion       : %d ops fused away\n", r.fuse);
         print_summary(log, &before, &after);
     }
     if (report) *report = r;

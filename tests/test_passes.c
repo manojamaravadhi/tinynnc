@@ -169,7 +169,7 @@ static int op2(Graph *g, OpType op, int a, int b) {
  * redundant activations, identity/zero constants, constant subexpressions,
  * duplicate ops, dead branches, skip connections (a value with several
  * consumers), and MATMUL results shared between two consumers. */
-Graph *random_graph(int *batch_out, int *width_out) {
+static Graph *random_graph(int *batch_out, int *width_out) {
     Graph *g = graph_new();
     int B = 1 + (int)rnd(4), w = 1 + (int)rnd(12);
     int s[2] = {B, w};
@@ -220,7 +220,7 @@ Graph *random_graph(int *batch_out, int *width_out) {
 
 /* Runs `iters` random graphs: the unoptimized output vs the output with each
  * pass mask in `masks`. Returns the largest |difference| seen (or INFINITY on error). */
-double equivalence_sweep(const unsigned *masks, int nmasks, int iters, int *nodes_removed) {
+static double equivalence_sweep(const unsigned *masks, int nmasks, int iters, int *nodes_removed) {
     double worst = 0;
     *nodes_removed = 0;
     for (int it = 0; it < iters; it++) {
@@ -268,6 +268,115 @@ static void random_graphs_cleanup_passes_equivalent(void) {
     CHECK(removed > 100); /* the generator really does exercise the passes */
 }
 
+
+/* ---------------------------------------------------------------------------- */
+/* Fusion                                                                       */
+/* ---------------------------------------------------------------------------- */
+
+static int count_op(const Graph *g, OpType op) {
+    int c = 0;
+    for (int i = 0; i < g->count; i++) c += !g->nodes[i].dead && g->nodes[i].op == op;
+    return c;
+}
+
+static void fusion_on_mlp(void) {
+    char err[512];
+    Graph *g = parse_model_file("examples/tiny_mlp.txt", err, sizeof err);
+    CHECK(g != NULL);
+    CHECK(pass_fuse_linear(g) == 2);      /* both MATMUL+ADD pairs */
+    CHECK(pass_fuse_linear_relu(g) == 1); /* the first layer's ReLU */
+    CHECK(count_op(g, OP_LINEAR_RELU) == 1 && count_op(g, OP_LINEAR) == 1);
+    CHECK(count_op(g, OP_MATMUL) == 0 && count_op(g, OP_ADD) == 0 && count_op(g, OP_RELU) == 0);
+    CHECK(live_compute(g) == 3);
+    graph_free(g);
+}
+
+static void fusion_skips_shared_matmul(void) {
+    /* m feeds both ADD and SIGMOID, so MATMUL+ADD must not fuse. */
+    char err[512];
+    Graph *g = parse_model_file("examples/shared_value.txt", err, sizeof err);
+    CHECK(g != NULL);
+    CHECK(pass_fuse_linear(g) == 0);
+    CHECK(count_op(g, OP_MATMUL) == 1);
+    graph_free(g);
+}
+
+static void fusion_skips_shared_linear(void) {
+    /* MATMUL+ADD may fuse (m has one consumer), but a = LINEAR is read by both
+     * RELU and the final ADD, so LINEAR+RELU must not fuse. */
+    Graph *g = parse("INPUT x 1 2\nCONST W 2 2 1 2 3 4\nCONST b 1 2 1 -9\n"
+                     "MATMUL m x W\nADD a m b\nRELU r a\nADD y r a\nOUTPUT y\n");
+    CHECK(g != NULL);
+    CHECK(pass_fuse_linear(g) == 1);
+    CHECK(pass_fuse_linear_relu(g) == 0);
+    CHECK(count_op(g, OP_LINEAR) == 1 && count_op(g, OP_RELU) == 1);
+    graph_free(g);
+}
+
+static void fusion_skips_matmul_that_is_output(void) {
+    /* m is the graph output and also read by ADD. It must stay materialized. */
+    Graph *g = parse("INPUT x 1 2\nCONST W 2 2 1 2 3 4\nCONST b 1 2 1 1\n"
+                     "MATMUL m x W\nADD a m b\nOUTPUT m\n");
+    CHECK(g != NULL);
+    CHECK(pass_fuse_linear(g) == 0);
+    graph_free(g);
+}
+
+static void fusion_bias_on_left(void) {
+    /* ADD(b, MATMUL) with a full-shape b is also a LINEAR (IEEE + is commutative). */
+    Graph *g = parse("INPUT x 2 2\nCONST W 2 2 1 2 3 4\nCONST b 2 2 1 1 2 2\n"
+                     "MATMUL m x W\nADD a b m\nOUTPUT a\n");
+    CHECK(g != NULL);
+    Graph *ref = graph_clone(g);
+    CHECK(pass_fuse_linear(g) == 1);
+    int s[2] = {2, 2};
+    float xv[4] = {1, -2, 3, 0.5f};
+    Tensor *x = tensor_from(2, s, xv);
+    char err[256];
+    Tensor *y1 = graph_run(ref, x, 1, NULL, err, sizeof err);
+    Tensor *y2 = graph_run(g, x, 1, NULL, err, sizeof err);
+    CHECK(y1 && y2 && memcmp(y1->data, y2->data, 4 * sizeof(float)) == 0);
+    tensor_free(x);
+    tensor_free(y1);
+    tensor_free(y2);
+    graph_free(ref);
+    graph_free(g);
+}
+
+static void fusion_skips_broadcast_matmul(void) {
+    /* Here the MATMUL result (1 x 2) is the broadcast operand of a (3 x 2) ADD.
+     * A fused LINEAR would only produce 1 row, so this must not fuse. */
+    Graph *g = parse("INPUT x 1 2\nCONST W 2 2 1 2 3 4\nCONST big 3 2 1 2 3 4 5 6\n"
+                     "MATMUL m x W\nADD a big m\nOUTPUT a\n");
+    CHECK(g != NULL);
+    CHECK(pass_fuse_linear(g) == 0);
+    graph_free(g);
+}
+
+static void cleanup_enables_fusion(void) {
+    /* In redundant.txt the second MATMUL has a duplicate feeding a dead SIGMOID.
+     * Only after CSE + DCE does it have a single consumer, so "all" fuses more
+     * than "fuse" alone would on the raw graph. */
+    char err[512];
+    Graph *g = parse_model_file("examples/redundant.txt", err, sizeof err);
+    CHECK(g != NULL);
+    PassReport r;
+    CHECK(run_passes(g, PASS_ALL, &r, NULL, err, sizeof err) == 0);
+    CHECK(live_compute(g) == 3); /* LINEAR_RELU, LINEAR, SOFTMAX */
+    CHECK(count_op(g, OP_LINEAR_RELU) == 1 && count_op(g, OP_LINEAR) == 1);
+    graph_free(g);
+}
+
+static void random_graphs_fusion_equivalent(void) {
+    const unsigned masks[] = {PASS_FUSE, PASS_ALL};
+    int removed = 0;
+    double worst = equivalence_sweep(masks, 2, 300, &removed);
+    printf("      300 random graphs x {fuse, all}: max |diff| = %g, ops removed = %d\n", worst,
+           removed);
+    CHECK(worst <= 1e-5);
+    CHECK(removed > 100);
+}
+
 void test_passes(void) {
     RUN(dce_removes_unreachable);
     RUN(fold_folds_constant_chain);
@@ -281,4 +390,12 @@ void test_passes(void) {
     RUN(pass_spec_parsing);
     RUN(redundant_example_end_to_end);
     RUN(random_graphs_cleanup_passes_equivalent);
+    RUN(fusion_on_mlp);
+    RUN(fusion_skips_shared_matmul);
+    RUN(fusion_skips_shared_linear);
+    RUN(fusion_skips_matmul_that_is_output);
+    RUN(fusion_bias_on_left);
+    RUN(fusion_skips_broadcast_matmul);
+    RUN(cleanup_enables_fusion);
+    RUN(random_graphs_fusion_equivalent);
 }

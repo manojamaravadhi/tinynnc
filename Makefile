@@ -34,7 +34,7 @@ LIB       := $(BUILD)/libtinynnc.a
 TEST_BIN  := $(BUILD)/run_tests
 BIN       ?= tinynnc
 PYTHON    ?= python3
-CROSS_OPTS ?= none,fold,simplify,cse,dce,all
+CROSS_OPTS ?= none,fold,simplify,cse,dce,fuse,all
 
 .PHONY: all test unit crosscheck debug leaks bench clean
 
