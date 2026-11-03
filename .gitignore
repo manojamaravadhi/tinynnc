@@ -1,0 +1,7 @@
+build/
+build-debug/
+*.o
+*.dot
+*.png
+__pycache__/
+.DS_Store
