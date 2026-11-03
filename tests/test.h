@@ -59,5 +59,6 @@ void test_ops(void);
 void test_graph(void);
 void test_parser(void);
 void test_exec(void);
+void test_passes(void);
 
 #endif

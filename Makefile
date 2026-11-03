@@ -34,7 +34,7 @@ LIB       := $(BUILD)/libtinynnc.a
 TEST_BIN  := $(BUILD)/run_tests
 BIN       ?= tinynnc
 PYTHON    ?= python3
-CROSS_OPTS ?= none
+CROSS_OPTS ?= none,fold,simplify,cse,dce,all
 
 .PHONY: all test unit crosscheck debug leaks bench clean
 
@@ -79,7 +79,7 @@ debug:
 
 leaks: $(TEST_BIN) $(BIN)
 	leaks --atExit -- ./$(TEST_BIN) | tail -3
-	leaks --atExit -- ./$(BIN) examples/redundant.txt --opt none --verify | tail -3
+	leaks --atExit -- ./$(BIN) examples/redundant.txt --opt all --verify | tail -3
 
 bench:
 	@echo "bench: added in milestone M6"
